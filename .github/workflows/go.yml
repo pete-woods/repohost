@@ -1,0 +1,99 @@
+name: Go
+
+on:
+  push: {}
+  pull_request: {}
+
+permissions:
+  contents: read
+  # Required to upload coverage data to GitHub code coverage.
+  code-quality: write
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      - name: Run static checks
+        run: task check
+
+  test:
+    name: Test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu]
+    runs-on: ${{ matrix.os }}-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Check out the PR head rather than the merge commit so coverage
+          # maps to the commit shown on the PR.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      - name: Test
+        run: task ci:test
+
+      - name: Upload coverage report
+        # Forks can't upload coverage: the token lacks code-quality write.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: coverage.xml
+          language: Go
+          label: code-coverage/${{ matrix.os }}
+          # Code coverage may not be enabled for this repository yet; warn
+          # rather than fail the build when the upload is rejected.
+          fail-on-error: false
+
+  release:
+    name: Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Serialise releases so concurrent merges can't compute the same version.
+    concurrency:
+      group: release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Full history so tags are available to compute the next version
+          # and the changelog range.
+          fetch-depth: 0
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: task ci:release
