@@ -25,9 +25,12 @@ tasks:
       - go tool -modfile tools/go.mod gotestsum -- -race {{.ARGS}}
 
   compose-up:
-    desc: Start the docker compose test dependencies (SeaweedFS, fake-gcs-server) in the background
+    desc: Start the docker compose test dependencies (SeaweedFS, fake-gcs-server) and wait until healthy
     cmds:
-      - docker compose up -d
+      # --wait blocks until each service's healthcheck passes, so tests started
+      # right after this won't race a not-yet-serving API (see healthchecks in
+      # docker-compose.yml).
+      - docker compose up -d --wait
 
   compose-down:
     desc: Stop the docker compose test dependencies and remove their volumes

@@ -28,20 +28,23 @@ import (
 	"gotest.tools/v3/assert/cmp"
 )
 
-// TestAcceptanceAPT publishes two versions of a real .deb through repohost.APT
-// to a containerized SeaweedFS, then installs it from a real debian container
-// via apt-get. Each phase is a subtest so its timing shows in the test output.
+// TestAcceptanceAPT publishes two versions of a real, signed .deb repository
+// through repohost.APT to a containerized SeaweedFS, then installs it from a real
+// debian container via apt-get with signature verification enabled (signed-by,
+// no trusted=yes). Each phase is a subtest so its timing shows in the output.
 func TestAcceptanceAPT(t *testing.T) {
 	ctx := context.Background()
 
 	h := setup(ctx, t)
 	client := h.startClient(ctx, t, "debian:bookworm-slim")
+	signer, publicKey := generateSigner(t)
 
-	t.Run("publish two versions", func(t *testing.T) {
+	t.Run("publish two versions (signed)", func(t *testing.T) {
 		apt := repohost.NewAPT(h.fixture.Client, h.fixture.Bucket, repohost.APTConfig{
 			Distribution: "stable",
 			Origin:       "repohost",
 			Label:        "repohost",
+			Signer:       signer,
 		})
 		for _, version := range []string{"1.0.0", "1.1.0"} {
 			err := apt.Add(ctx, "main", bytes.NewReader(buildDeb(t, version)))
@@ -49,10 +52,14 @@ func TestAcceptanceAPT(t *testing.T) {
 		}
 	})
 
-	t.Run("configure apt for our repo only", func(t *testing.T) {
-		execOK(ctx, t, client, "sh", "-c", "rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*")
-		sources := fmt.Sprintf("deb [trusted=yes] %s stable main\n", h.baseURL)
-		err := client.CopyToContainer(ctx, []byte(sources), "/etc/apt/sources.list.d/repohost.list", 0o644)
+	t.Run("configure signed apt repo", func(t *testing.T) {
+		execOK(ctx, t, client, "sh", "-c",
+			"rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && mkdir -p /etc/apt/keyrings")
+		err := client.CopyToContainer(ctx, publicKey, "/etc/apt/keyrings/repohost.asc", 0o644)
+		assert.NilError(t, err)
+
+		sources := fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/repohost.asc] %s stable main\n", h.baseURL)
+		err = client.CopyToContainer(ctx, []byte(sources), "/etc/apt/sources.list.d/repohost.list", 0o644)
 		assert.NilError(t, err)
 	})
 

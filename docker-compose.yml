@@ -22,12 +22,26 @@ services:
       - ./internal/testing/s3test/s3.json:/etc/seaweedfs/s3.json
     ports:
       - '127.0.0.1:9123:9123'
+    # The S3 root answers 403 to anonymous requests once it is serving; curl
+    # without -f treats any HTTP response as success (and fails on the pre-serving
+    # connection reset), so this flips to healthy exactly when S3 is ready.
+    healthcheck:
+      test: ['CMD', 'curl', '-s', '-o', '/dev/null', 'http://localhost:9123/']
+      interval: 1s
+      timeout: 3s
+      retries: 30
 
   fake-gcs-server:
     image: 'fsouza/fake-gcs-server'
     command: ['-scheme', 'http', '-port', '9124', '-backend', 'memory', '-public-host', 'localhost:9124', '-external-url', 'http://localhost:9124']
     ports:
       - '127.0.0.1:9124:9124'
+    # fake-gcs-server exposes a dedicated health endpoint that returns 200.
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://localhost:9124/_internal/healthcheck']
+      interval: 1s
+      timeout: 3s
+      retries: 30
 
 # Name the default network deterministically (rather than <dir>_default) so the
 # acceptance tests can attach client containers to it and reach services by name

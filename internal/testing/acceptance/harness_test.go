@@ -40,6 +40,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/docker/go-sdk/container"
 	"github.com/docker/go-sdk/container/exec"
 	"github.com/goreleaser/nfpm/v2"
@@ -47,6 +49,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/pete-woods/repohost/internal/testing/s3test"
+	"github.com/pete-woods/repohost/pgp"
 
 	_ "github.com/goreleaser/nfpm/v2/deb" // register the deb packager
 	_ "github.com/goreleaser/nfpm/v2/rpm" // register the rpm packager
@@ -194,6 +197,31 @@ func buildPackage(t *testing.T, format, version string) []byte {
 	err = packager.Package(info, &buf)
 	assert.NilError(t, err, "build %s package", format)
 	return buf.Bytes()
+}
+
+// generateSigner creates a throwaway OpenPGP key and returns a Signer for it
+// plus its ASCII-armored public key (which the client imports to verify the
+// repository).
+func generateSigner(t *testing.T) (*pgp.Signer, []byte) {
+	t.Helper()
+
+	entity, err := openpgp.NewEntity("repohost acceptance", "", "acceptance@example.com", nil)
+	assert.NilError(t, err)
+
+	var priv bytes.Buffer
+	w, err := armor.Encode(&priv, openpgp.PrivateKeyType, nil)
+	assert.NilError(t, err)
+	err = entity.SerializePrivate(w, nil)
+	assert.NilError(t, err)
+	err = w.Close()
+	assert.NilError(t, err)
+
+	signer, err := pgp.NewSigner(priv.Bytes(), "")
+	assert.NilError(t, err)
+
+	pub, err := signer.ArmoredPublicKey()
+	assert.NilError(t, err)
+	return signer, pub
 }
 
 // hostArch maps the host GOARCH to the nfpm architecture, so packages match the

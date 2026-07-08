@@ -21,6 +21,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,15 +30,17 @@ import (
 
 	"github.com/pete-woods/repohost/internal/apt"
 	"github.com/pete-woods/repohost/internal/deb"
+	"github.com/pete-woods/repohost/internal/storage"
+	"github.com/pete-woods/repohost/internal/storage/s3store"
 	"github.com/pete-woods/repohost/internal/testing/debtest"
-	"github.com/pete-woods/repohost/internal/testing/memstore"
+	"github.com/pete-woods/repohost/internal/testing/s3test"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 )
 
 func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := apt.New(store, apt.Config{
 		Distribution: "stable",
 		Origin:       "Acme",
@@ -49,9 +53,10 @@ func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 	assert.NilError(t, err)
 
 	poolKey := "pool/main/h/hello/hello_2.10_amd64.deb"
-	assert.Check(t, store.Has(poolKey), "expected pool object %s", poolKey)
+	poolExists := objectExists(ctx, t, store, poolKey)
+	assert.Check(t, poolExists, "expected pool object %s", poolKey)
 
-	pkgs := readPackages(t, store, "dists/stable/main/binary-amd64/Packages")
+	pkgs := readPackages(ctx, t, store, "dists/stable/main/binary-amd64/Packages")
 	assert.Assert(t, cmp.Len(pkgs, 1))
 	entry := pkgs[0]
 	assert.Check(t, cmp.Equal(entry.Name, "hello"))
@@ -63,9 +68,10 @@ func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 	_, hasSHA256 := entry.Get("SHA256")
 	assert.Check(t, hasSHA256, "Packages stanza must carry a SHA256")
 
-	assert.Check(t, store.Has("dists/stable/main/binary-amd64/Packages.gz"))
+	gzExists := objectExists(ctx, t, store, "dists/stable/main/binary-amd64/Packages.gz")
+	assert.Check(t, gzExists)
 
-	release := getString(t, store, "dists/stable/Release")
+	release := getString(ctx, t, store, "dists/stable/Release")
 	for _, want := range []string{
 		"Origin: Acme",
 		"Suite: stable",
@@ -81,18 +87,18 @@ func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 
 func TestReleaseChecksumsMatchStoredFiles(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := apt.New(store, apt.Config{Distribution: "stable"})
 
 	err := pub.Add(ctx, "main", bytes.NewReader(debtest.Package(t, "hello", "1.0", "amd64")))
 	assert.NilError(t, err)
 
-	release := getString(t, store, "dists/stable/Release")
+	release := getString(ctx, t, store, "dists/stable/Release")
 	sums := parseSHA256Section(release)
 	assert.Assert(t, len(sums) != 0, "Release must list SHA256 checksums")
 
 	for relPath, want := range sums {
-		data, ok := store.Data("dists/stable/" + relPath)
+		data, ok := getBytes(ctx, t, store, "dists/stable/"+relPath)
 		assert.Check(t, ok, "Release references missing file %q", relPath)
 		if !ok {
 			continue
@@ -105,23 +111,25 @@ func TestReleaseChecksumsMatchStoredFiles(t *testing.T) {
 
 func TestAddArchitectureAllUsesBinaryAllBucket(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := apt.New(store, apt.Config{Distribution: "stable"})
 
 	err := pub.Add(ctx, "main", bytes.NewReader(debtest.Package(t, "docs", "1.0", "all")))
 	assert.NilError(t, err)
 
-	assert.Check(t, store.Has("pool/main/d/docs/docs_1.0_all.deb"))
-	assert.Check(t, store.Has("dists/stable/main/binary-all/Packages"))
+	poolExists := objectExists(ctx, t, store, "pool/main/d/docs/docs_1.0_all.deb")
+	assert.Check(t, poolExists)
+	indexExists := objectExists(ctx, t, store, "dists/stable/main/binary-all/Packages")
+	assert.Check(t, indexExists)
 
-	release := getString(t, store, "dists/stable/Release")
+	release := getString(ctx, t, store, "dists/stable/Release")
 	archLine := fieldLine(release, "Architectures")
 	assert.Check(t, cmp.Contains(strings.Fields(archLine), "all"))
 }
 
 func TestRetentionPrunesOldVersions(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := apt.New(store, apt.Config{Distribution: "stable", KeepVersions: 2})
 
 	for _, v := range []string{"1.0", "1.1", "1.2"} {
@@ -129,7 +137,7 @@ func TestRetentionPrunesOldVersions(t *testing.T) {
 		assert.NilError(t, err)
 	}
 
-	pkgs := readPackages(t, store, "dists/stable/main/binary-amd64/Packages")
+	pkgs := readPackages(ctx, t, store, "dists/stable/main/binary-amd64/Packages")
 	got := make([]string, 0, len(pkgs))
 	for _, p := range pkgs {
 		got = append(got, p.Version)
@@ -138,28 +146,39 @@ func TestRetentionPrunesOldVersions(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(got, []string{"1.1", "1.2"}))
 
 	// The pruned version's pool object must be deleted, the kept ones retained.
-	assert.Check(t, !store.Has("pool/main/h/hello/hello_1.0_amd64.deb"), "old version should be pruned from the pool")
-	assert.Check(t, store.Has("pool/main/h/hello/hello_1.1_amd64.deb"))
-	assert.Check(t, store.Has("pool/main/h/hello/hello_1.2_amd64.deb"))
+	oldGone := !objectExists(ctx, t, store, "pool/main/h/hello/hello_1.0_amd64.deb")
+	assert.Check(t, oldGone, "old version should be pruned from the pool")
+	kept11 := objectExists(ctx, t, store, "pool/main/h/hello/hello_1.1_amd64.deb")
+	assert.Check(t, kept11)
+	kept12 := objectExists(ctx, t, store, "pool/main/h/hello/hello_1.2_amd64.deb")
+	assert.Check(t, kept12)
 }
 
 func TestSignerWritesInReleaseAndDetachedSignature(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := apt.New(store, apt.Config{Distribution: "stable", Signer: fakeSigner{}})
 
 	err := pub.Add(ctx, "main", bytes.NewReader(debtest.Package(t, "hello", "1.0", "amd64")))
 	assert.NilError(t, err)
 
-	inRelease := getString(t, store, "dists/stable/InRelease")
+	inRelease := getString(ctx, t, store, "dists/stable/InRelease")
 	assert.Check(t, strings.HasPrefix(inRelease, "-----CLEARSIGNED-----\n"))
 	assert.Check(t, cmp.Contains(inRelease, "Suite: stable"))
 
-	sig := getString(t, store, "dists/stable/Release.gpg")
+	sig := getString(ctx, t, store, "dists/stable/Release.gpg")
 	assert.Check(t, cmp.Equal(sig, "-----DETACHED SIGNATURE-----"))
 }
 
 // --- helpers ---
+
+// newStore returns an s3store backed by a fresh bucket on the SeaweedFS started
+// by docker compose. Tests skip when it is not running (see s3test).
+func newStore(ctx context.Context, t *testing.T) storage.Store {
+	t.Helper()
+	fix := s3test.Default(ctx, t)
+	return s3store.New(fix.Client, fix.Bucket)
+}
 
 type fakeSigner struct{}
 
@@ -171,20 +190,40 @@ func (fakeSigner) DetachSign(_ context.Context, _ []byte) ([]byte, error) {
 	return []byte("-----DETACHED SIGNATURE-----"), nil
 }
 
-func readPackages(t testing.TB, s *memstore.Store, key string) []*deb.Package {
+func readPackages(ctx context.Context, t testing.TB, store storage.Store, key string) []*deb.Package {
 	t.Helper()
-	data, ok := s.Data(key)
+	data, ok := getBytes(ctx, t, store, key)
 	assert.Assert(t, ok, "missing index %s", key)
 	pkgs, err := deb.ParseControlFile(data)
 	assert.NilError(t, err)
 	return pkgs
 }
 
-func getString(t testing.TB, s *memstore.Store, key string) string {
+func getString(ctx context.Context, t testing.TB, store storage.Store, key string) string {
 	t.Helper()
-	data, ok := s.Data(key)
+	data, ok := getBytes(ctx, t, store, key)
 	assert.Assert(t, ok, "missing object %s", key)
 	return string(data)
+}
+
+// getBytes fetches an object's bytes, reporting whether it exists.
+func getBytes(ctx context.Context, t testing.TB, store storage.Store, key string) ([]byte, bool) {
+	t.Helper()
+	rc, err := store.Get(ctx, key)
+	if errors.Is(err, storage.ErrNotExist) {
+		return nil, false
+	}
+	assert.NilError(t, err)
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	assert.NilError(t, err)
+	return data, true
+}
+
+func objectExists(ctx context.Context, t testing.TB, store storage.Store, key string) bool {
+	t.Helper()
+	_, ok := getBytes(ctx, t, store, key)
+	return ok
 }
 
 // fieldLine returns the value of a single-line Release field.

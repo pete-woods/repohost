@@ -23,12 +23,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/pete-woods/repohost/internal/rpm"
-	"github.com/pete-woods/repohost/internal/testing/memstore"
+	"github.com/pete-woods/repohost/internal/storage"
+	"github.com/pete-woods/repohost/internal/storage/s3store"
 	"github.com/pete-woods/repohost/internal/testing/rpmtest"
+	"github.com/pete-woods/repohost/internal/testing/s3test"
 	"github.com/pete-woods/repohost/internal/yum"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -36,7 +39,7 @@ import (
 
 func TestAddPublishesLayoutAndMetadata(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := yum.New(store, yum.Config{})
 
 	data := rpmtest.Build(t, rpmtest.Options{
@@ -52,11 +55,16 @@ func TestAddPublishesLayoutAndMetadata(t *testing.T) {
 	err := pub.Add(ctx, bytes.NewReader(data))
 	assert.NilError(t, err)
 
-	assert.Check(t, store.Has("Packages/h/hello-2.10-1.el9.x86_64.rpm"))
-	assert.Check(t, store.Has("repodata/repomd.xml"))
-	assert.Check(t, store.Has("repodata/repohost-state.json"))
+	for _, key := range []string{
+		"Packages/h/hello-2.10-1.el9.x86_64.rpm",
+		"repodata/repomd.xml",
+		"repodata/repohost-state.json",
+	} {
+		ok := objectExists(ctx, t, store, key)
+		assert.Check(t, ok, "missing %s", key)
+	}
 
-	md := parseRepomd(t, store)
+	md := parseRepomd(ctx, t, store)
 	byType := map[string]repomdEntry{}
 	for _, d := range md.Data {
 		byType[d.Type] = d
@@ -66,7 +74,7 @@ func TestAddPublishesLayoutAndMetadata(t *testing.T) {
 		assert.Check(t, ok, "repomd missing %s", typ)
 	}
 
-	primaryXML := gunzip(t, mustData(t, store, byType["primary"].Location.Href))
+	primaryXML := gunzip(t, mustData(ctx, t, store, byType["primary"].Location.Href))
 	for _, want := range []string{
 		`xmlns:rpm="http://linux.duke.edu/metadata/rpm"`,
 		`<name>hello</name>`,
@@ -83,23 +91,23 @@ func TestAddPublishesLayoutAndMetadata(t *testing.T) {
 		assert.Check(t, cmp.Contains(string(primaryXML), want))
 	}
 
-	filelistsXML := gunzip(t, mustData(t, store, byType["filelists"].Location.Href))
+	filelistsXML := gunzip(t, mustData(ctx, t, store, byType["filelists"].Location.Href))
 	assert.Check(t, cmp.Contains(string(filelistsXML), `pkgid="`+pkgid+`"`))
 	assert.Check(t, cmp.Contains(string(filelistsXML), `<file>/usr/bin/hello</file>`))
 }
 
 func TestRepomdChecksumsMatchStoredFiles(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := yum.New(store, yum.Config{})
 
 	err := pub.Add(ctx, bytes.NewReader(rpmtest.Package(t, "hello", "1.0", "1", "x86_64")))
 	assert.NilError(t, err)
 
-	md := parseRepomd(t, store)
+	md := parseRepomd(ctx, t, store)
 	assert.Assert(t, len(md.Data) == 3)
 	for _, d := range md.Data {
-		gz := mustData(t, store, d.Location.Href)
+		gz := mustData(ctx, t, store, d.Location.Href)
 		gzHash := sha256.Sum256(gz)
 		assert.Check(t, cmp.Equal(hex.EncodeToString(gzHash[:]), d.Checksum.Value), "gz checksum for %s", d.Type)
 
@@ -110,7 +118,7 @@ func TestRepomdChecksumsMatchStoredFiles(t *testing.T) {
 
 func TestRetentionPrunesOldVersions(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := yum.New(store, yum.Config{KeepVersions: 1})
 
 	for _, v := range []string{"1.0", "2.0"} {
@@ -118,15 +126,17 @@ func TestRetentionPrunesOldVersions(t *testing.T) {
 		assert.NilError(t, err)
 	}
 
-	assert.Check(t, !store.Has("Packages/h/hello-1.0-1.x86_64.rpm"), "old version should be pruned")
-	assert.Check(t, store.Has("Packages/h/hello-2.0-1.x86_64.rpm"))
+	oldGone := !objectExists(ctx, t, store, "Packages/h/hello-1.0-1.x86_64.rpm")
+	assert.Check(t, oldGone, "old version should be pruned")
+	kept := objectExists(ctx, t, store, "Packages/h/hello-2.0-1.x86_64.rpm")
+	assert.Check(t, kept)
 
-	md := parseRepomd(t, store)
+	md := parseRepomd(ctx, t, store)
 	byType := map[string]repomdEntry{}
 	for _, d := range md.Data {
 		byType[d.Type] = d
 	}
-	primaryXML := string(gunzip(t, mustData(t, store, byType["primary"].Location.Href)))
+	primaryXML := string(gunzip(t, mustData(ctx, t, store, byType["primary"].Location.Href)))
 	assert.Check(t, cmp.Contains(primaryXML, `ver="2.0"`))
 	assert.Check(t, !contains(primaryXML, `ver="1.0"`), "pruned version must not remain in primary.xml")
 	assert.Check(t, cmp.Contains(primaryXML, `packages="1"`))
@@ -134,18 +144,26 @@ func TestRetentionPrunesOldVersions(t *testing.T) {
 
 func TestSignerWritesRepomdSignature(t *testing.T) {
 	ctx := context.Background()
-	store := memstore.New()
+	store := newStore(ctx, t)
 	pub := yum.New(store, yum.Config{Signer: fakeSigner{}})
 
 	err := pub.Add(ctx, bytes.NewReader(rpmtest.Package(t, "hello", "1.0", "1", "x86_64")))
 	assert.NilError(t, err)
 
-	sig, ok := store.Data("repodata/repomd.xml.asc")
+	sig, ok := getBytes(ctx, t, store, "repodata/repomd.xml.asc")
 	assert.Assert(t, ok, "repomd.xml.asc must be written")
 	assert.Check(t, cmp.Equal(string(sig), "-----DETACHED-----"))
 }
 
 // --- helpers ---
+
+// newStore returns an s3store backed by a fresh bucket on the SeaweedFS started
+// by docker compose. Tests skip when it is not running (see s3test).
+func newStore(ctx context.Context, t *testing.T) storage.Store {
+	t.Helper()
+	fix := s3test.Default(ctx, t)
+	return s3store.New(fix.Client, fix.Bucket)
+}
 
 type fakeSigner struct{}
 
@@ -172,19 +190,38 @@ type repomdEntry struct {
 	} `xml:"location"`
 }
 
-func parseRepomd(t testing.TB, store *memstore.Store) repomdDoc {
+func parseRepomd(ctx context.Context, t testing.TB, store storage.Store) repomdDoc {
 	t.Helper()
 	var doc repomdDoc
-	err := xml.Unmarshal(mustData(t, store, "repodata/repomd.xml"), &doc)
+	err := xml.Unmarshal(mustData(ctx, t, store, "repodata/repomd.xml"), &doc)
 	assert.NilError(t, err)
 	return doc
 }
 
-func mustData(t testing.TB, store *memstore.Store, key string) []byte {
+func mustData(ctx context.Context, t testing.TB, store storage.Store, key string) []byte {
 	t.Helper()
-	data, ok := store.Data(key)
+	data, ok := getBytes(ctx, t, store, key)
 	assert.Assert(t, ok, "missing object %s", key)
 	return data
+}
+
+func getBytes(ctx context.Context, t testing.TB, store storage.Store, key string) ([]byte, bool) {
+	t.Helper()
+	rc, err := store.Get(ctx, key)
+	if errors.Is(err, storage.ErrNotExist) {
+		return nil, false
+	}
+	assert.NilError(t, err)
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	assert.NilError(t, err)
+	return data, true
+}
+
+func objectExists(ctx context.Context, t testing.TB, store storage.Store, key string) bool {
+	t.Helper()
+	_, ok := getBytes(ctx, t, store, key)
+	return ok
 }
 
 func gunzip(t testing.TB, data []byte) []byte {

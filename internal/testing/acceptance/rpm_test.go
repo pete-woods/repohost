@@ -28,26 +28,35 @@ import (
 	"gotest.tools/v3/assert/cmp"
 )
 
-// TestAcceptanceYUM publishes two versions of a real .rpm through repohost.YUM
-// to a containerized SeaweedFS, then installs it from a real fedora container
-// via dnf. Each phase is a subtest so its timing shows in the test output.
+// TestAcceptanceYUM publishes two versions of a real, signed .rpm repository
+// through repohost.YUM to a containerized SeaweedFS, then installs it from a real
+// fedora container via dnf with repository signature verification enabled
+// (repo_gpgcheck=1). Each phase is a subtest so its timing shows in the output.
 func TestAcceptanceYUM(t *testing.T) {
 	ctx := context.Background()
 
 	h := setup(ctx, t)
 	client := h.startClient(ctx, t, "fedora:41")
+	signer, publicKey := generateSigner(t)
 
-	t.Run("publish two versions", func(t *testing.T) {
-		repo := repohost.NewYUM(h.fixture.Client, h.fixture.Bucket, repohost.YUMConfig{})
+	t.Run("publish two versions (signed)", func(t *testing.T) {
+		repo := repohost.NewYUM(h.fixture.Client, h.fixture.Bucket, repohost.YUMConfig{Signer: signer})
 		for _, version := range []string{"1.0.0", "1.1.0"} {
 			err := repo.Add(ctx, bytes.NewReader(buildRPM(t, version)))
 			assert.NilError(t, err, "publish rpm %s", version)
 		}
 	})
 
-	t.Run("configure dnf repo", func(t *testing.T) {
-		repoFile := fmt.Sprintf("[repohost]\nname=repohost\nbaseurl=%s/\nenabled=1\ngpgcheck=0\nrepo_gpgcheck=0\n", h.baseURL)
-		err := client.CopyToContainer(ctx, []byte(repoFile), "/etc/yum.repos.d/repohost.repo", 0o644)
+	t.Run("configure signed dnf repo", func(t *testing.T) {
+		execOK(ctx, t, client, "mkdir", "-p", "/etc/pki/rpm-gpg")
+		err := client.CopyToContainer(ctx, publicKey, "/etc/pki/rpm-gpg/repohost.asc", 0o644)
+		assert.NilError(t, err)
+
+		// repo_gpgcheck=1 verifies repomd.xml.asc against gpgkey; gpgcheck=0 skips
+		// per-package RPM signatures (the test packages are not RPM-signed — that
+		// is the package builder's concern, not the repo host's).
+		repoFile := fmt.Sprintf("[repohost]\nname=repohost\nbaseurl=%s/\nenabled=1\ngpgcheck=0\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/repohost.asc\n", h.baseURL)
+		err = client.CopyToContainer(ctx, []byte(repoFile), "/etc/yum.repos.d/repohost.repo", 0o644)
 		assert.NilError(t, err)
 	})
 
