@@ -8,6 +8,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.27
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.0
 	github.com/aws/smithy-go v1.27.3
+	github.com/klauspost/compress v1.19.0
+	github.com/ulikunitz/xz v0.5.15
 	google.golang.org/api v0.287.1
 	gotest.tools/v3 v3.5.2
 )
