@@ -24,6 +24,16 @@ tasks:
     cmds:
       - go tool -modfile tools/go.mod gotestsum -- -race {{.ARGS}}
 
+  compose-up:
+    desc: Start the docker compose test dependencies (SeaweedFS, fake-gcs-server) in the background
+    cmds:
+      - docker compose up -d
+
+  compose-down:
+    desc: Stop the docker compose test dependencies and remove their volumes
+    cmds:
+      - docker compose down -v
+
   check:
     desc: Run all static checks
     cmds:
