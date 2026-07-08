@@ -18,10 +18,12 @@
 // repohost and install them with real apt and dnf clients.
 //
 // The tests reuse the SeaweedFS started by docker compose (see
-// docker-compose.yml), rather than starting their own: the host publishes to it
-// at localhost:9123, and client containers reach it at host.docker.internal:9123
-// (Docker Desktop maps that to the host; a Linux CI would add
-// host.docker.internal:host-gateway). Bring it up first with:
+// docker-compose.yml), rather than starting their own. The host publishes to it
+// through its mapped port at localhost:9123; client containers attach to the
+// compose network and reach it by service name at seaweedfs:9123. Going
+// container-to-container (rather than back out through the host) avoids relying
+// on host.docker.internal, so it works the same on Docker Desktop and Linux CI.
+// Bring the dependencies up first with:
 //
 //	docker compose up -d seaweedfs
 package acceptance
@@ -56,9 +58,12 @@ const (
 	// pkgMarker is what the installed binary prints, proving delivery + install.
 	pkgMarker = "REPOHOST_OK"
 
-	// clientBaseHost is how a client container reaches the compose SeaweedFS
-	// (its host-mapped S3 port), served from the host.
-	clientBaseHost = "host.docker.internal:9123"
+	// composeNetwork is the fixed name of the docker compose default network (set
+	// in docker-compose.yml); client containers attach to it to reach services.
+	composeNetwork = "repohost"
+	// clientBaseHost is how a client container reaches the compose SeaweedFS: the
+	// service name and its in-container S3 port, over the compose network.
+	clientBaseHost = "seaweedfs:9123"
 )
 
 // harness is a bucket on the compose SeaweedFS, ready for publishing. baseURL is
@@ -93,6 +98,8 @@ func (h *harness) startClient(ctx context.Context, t *testing.T, image string) *
 	ctr, err := container.Run(ctx,
 		container.WithImage(image),
 		container.WithCmd("sleep", "infinity"),
+		// Attach to the compose network so the client can reach seaweedfs by name.
+		container.WithNetworkName(nil, composeNetwork),
 	)
 	assert.NilError(t, err, "start client %s", image)
 	container.Cleanup(t, ctr, container.TerminateTimeout(time.Second))

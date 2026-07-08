@@ -28,3 +28,10 @@ services:
     command: ['-scheme', 'http', '-port', '9124', '-backend', 'memory', '-public-host', 'localhost:9124', '-external-url', 'http://localhost:9124']
     ports:
       - '127.0.0.1:9124:9124'
+
+# Name the default network deterministically (rather than <dir>_default) so the
+# acceptance tests can attach client containers to it and reach services by name
+# (see internal/testing/acceptance/harness_test.go).
+networks:
+  default:
+    name: repohost
