@@ -42,7 +42,7 @@ func TestAPTPublishAndRetention(t *testing.T) {
 	ctx := context.Background()
 	fix := s3test.Default(ctx, t)
 
-	repo := repohost.NewAPT(fix.Client, fix.Bucket, repohost.APTConfig{
+	repo := repohost.NewAPT(repohost.S3(fix.Client, fix.Bucket), repohost.APTConfig{
 		Distribution: "stable",
 		Origin:       "Acme",
 		Label:        "Acme",

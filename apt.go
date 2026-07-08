@@ -20,10 +20,8 @@ import (
 	"context"
 	"io"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pete-woods/repohost/internal/apt"
 	"github.com/pete-woods/repohost/internal/sign"
-	"github.com/pete-woods/repohost/internal/storage/s3store"
 )
 
 // Signer signs repository metadata. Implement it to wrap your GPG key; repohost
@@ -40,12 +38,9 @@ type APT struct {
 	publisher *apt.Publisher
 }
 
-// NewAPT returns an APT that publishes to bucket using the given S3 client. The
-// caller owns the client and its configuration (credentials, region, endpoint),
-// which is what lets the same code target AWS S3 or any S3-compatible service. A
-// GCS constructor will follow.
-func NewAPT(client *s3.Client, bucket string, cfg APTConfig) *APT {
-	return &APT{publisher: apt.New(s3store.New(client, bucket), cfg)}
+// NewAPT returns an APT that publishes to the given backend (see S3 and GCS).
+func NewAPT(backend Backend, cfg APTConfig) *APT {
+	return &APT{publisher: apt.New(backend.store, cfg)}
 }
 
 // Add uploads a .deb read from deb into the named component ("" means "main"),

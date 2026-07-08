@@ -39,7 +39,7 @@ func TestYUMPublishAndRetention(t *testing.T) {
 	ctx := context.Background()
 	fix := s3test.Default(ctx, t)
 
-	repo := repohost.NewYUM(fix.Client, fix.Bucket, repohost.YUMConfig{KeepVersions: 1})
+	repo := repohost.NewYUM(repohost.S3(fix.Client, fix.Bucket), repohost.YUMConfig{KeepVersions: 1})
 
 	for _, version := range []string{"1.0", "2.0"} {
 		rpmData := rpmtest.Build(t, rpmtest.Options{

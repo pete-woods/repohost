@@ -29,8 +29,8 @@ import (
 )
 
 // TestAcceptanceYUM publishes two versions of a real, signed .rpm repository
-// through repohost.YUM to a containerized SeaweedFS, then installs it from a real
-// fedora container via dnf with repository signature verification enabled
+// through repohost.YUM to SeaweedFS, then installs it from a real fedora
+// container via dnf with repository signature verification enabled
 // (repo_gpgcheck=1). Each phase is a subtest so its timing shows in the output.
 func TestAcceptanceYUM(t *testing.T) {
 	ctx := context.Background()
@@ -40,7 +40,7 @@ func TestAcceptanceYUM(t *testing.T) {
 	signer, publicKey := generateSigner(t)
 
 	t.Run("publish two versions (signed)", func(t *testing.T) {
-		repo := repohost.NewYUM(h.fixture.Client, h.fixture.Bucket, repohost.YUMConfig{Signer: signer})
+		repo := repohost.NewYUM(h.backend, repohost.YUMConfig{Signer: signer})
 		for _, version := range []string{"1.0.0", "1.1.0"} {
 			err := repo.Add(ctx, bytes.NewReader(buildRPM(t, version)))
 			assert.NilError(t, err, "publish rpm %s", version)

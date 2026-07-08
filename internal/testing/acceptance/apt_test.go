@@ -29,9 +29,9 @@ import (
 )
 
 // TestAcceptanceAPT publishes two versions of a real, signed .deb repository
-// through repohost.APT to a containerized SeaweedFS, then installs it from a real
-// debian container via apt-get with signature verification enabled (signed-by,
-// no trusted=yes). Each phase is a subtest so its timing shows in the output.
+// through repohost.APT to SeaweedFS, then installs it from a real debian
+// container via apt-get with signature verification enabled (signed-by, no
+// trusted=yes). Each phase is a subtest so its timing shows in the output.
 func TestAcceptanceAPT(t *testing.T) {
 	ctx := context.Background()
 
@@ -40,7 +40,7 @@ func TestAcceptanceAPT(t *testing.T) {
 	signer, publicKey := generateSigner(t)
 
 	t.Run("publish two versions (signed)", func(t *testing.T) {
-		apt := repohost.NewAPT(h.fixture.Client, h.fixture.Bucket, repohost.APTConfig{
+		apt := repohost.NewAPT(h.backend, repohost.APTConfig{
 			Distribution: "stable",
 			Origin:       "repohost",
 			Label:        "repohost",

@@ -17,15 +17,15 @@
 // Package acceptance holds end-to-end tests that publish real packages through
 // repohost and install them with real apt and dnf clients.
 //
-// The tests reuse the SeaweedFS started by docker compose (see
-// docker-compose.yml), rather than starting their own. The host publishes to it
-// through its mapped port at localhost:9123; client containers attach to the
-// compose network and reach it by service name at seaweedfs:9123. Going
-// container-to-container (rather than back out through the host) avoids relying
-// on host.docker.internal, so it works the same on Docker Desktop and Linux CI.
-// Bring the dependencies up first with:
+// The tests reuse the SeaweedFS and fake-gcs-server started by docker compose
+// (see docker-compose.yml), rather than starting their own. The host publishes
+// through each service's mapped port on localhost; client containers attach to
+// the compose network and reach the services by name (seaweedfs:9123,
+// fake-gcs-server:9124). Going container-to-container (rather than back out
+// through the host) avoids relying on host.docker.internal, so it works the same
+// on Docker Desktop and Linux CI. Bring the dependencies up first with:
 //
-//	docker compose up -d seaweedfs
+//	docker compose up -d
 package acceptance
 
 import (
@@ -48,6 +48,7 @@ import (
 	"github.com/goreleaser/nfpm/v2/files"
 	"gotest.tools/v3/assert"
 
+	"github.com/pete-woods/repohost"
 	"github.com/pete-woods/repohost/internal/testing/s3test"
 	"github.com/pete-woods/repohost/pgp"
 
@@ -64,15 +65,23 @@ const (
 	// composeNetwork is the fixed name of the docker compose default network (set
 	// in docker-compose.yml); client containers attach to it to reach services.
 	composeNetwork = "repohost"
-	// clientBaseHost is how a client container reaches the compose SeaweedFS: the
-	// service name and its in-container S3 port, over the compose network.
-	clientBaseHost = "seaweedfs:9123"
+	// seaweedHost is the SeaweedFS service name + in-container S3 port.
+	seaweedHost = "seaweedfs:9123"
 )
 
-// harness is a bucket on the compose SeaweedFS, ready for publishing. baseURL is
-// how client containers reach the repository root.
+// harness is a repository backend with a fresh bucket, ready for publishing.
+// baseURL is how client containers reach the repository root over the compose
+// network.
+//
+// Acceptance runs against S3 (SeaweedFS) only. A GCS acceptance run is not
+// included because fake-gcs-server gates its plain /<bucket>/<object> download
+// route to a single -public-host: it cannot serve both the host-side store
+// tests (localhost) and the in-container apt/dnf clients (fake-gcs-server) at
+// once. This is a fixture limitation, not a repohost one — a real public GCS
+// bucket serves apt/dnf fine, and the GCS backend itself is covered by
+// gcsstore's and the root package's GCS integration tests.
 type harness struct {
-	fixture *s3test.Fixture
+	backend repohost.Backend
 	baseURL string
 }
 
@@ -82,13 +91,11 @@ type harness struct {
 // failure rather than a skip.
 func setup(ctx context.Context, t *testing.T) *harness {
 	t.Helper()
-
 	fix := &s3test.Fixture{ForceLocal: true}
 	s3test.Setup(ctx, t, fix)
-
 	return &harness{
-		fixture: fix,
-		baseURL: fmt.Sprintf("http://%s/%s", clientBaseHost, fix.Bucket),
+		backend: repohost.S3(fix.Client, fix.Bucket),
+		baseURL: fmt.Sprintf("http://%s/%s", seaweedHost, fix.Bucket),
 	}
 }
 

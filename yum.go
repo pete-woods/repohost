@@ -20,8 +20,6 @@ import (
 	"context"
 	"io"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/pete-woods/repohost/internal/storage/s3store"
 	"github.com/pete-woods/repohost/internal/yum"
 )
 
@@ -34,12 +32,9 @@ type YUM struct {
 	publisher *yum.Publisher
 }
 
-// NewYUM returns a YUM that publishes to bucket using the given S3 client. As
-// with NewAPT, the caller owns the client and its configuration, so the same
-// code targets AWS S3 or any S3-compatible service. A GCS constructor will
-// follow.
-func NewYUM(client *s3.Client, bucket string, cfg YUMConfig) *YUM {
-	return &YUM{publisher: yum.New(s3store.New(client, bucket), cfg)}
+// NewYUM returns a YUM that publishes to the given backend (see S3 and GCS).
+func NewYUM(backend Backend, cfg YUMConfig) *YUM {
+	return &YUM{publisher: yum.New(backend.store, cfg)}
 }
 
 // Add reads an .rpm from rpm, uploads it into the repository's Packages tree,
