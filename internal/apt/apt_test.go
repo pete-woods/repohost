@@ -21,25 +21,22 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/pete-woods/repohost/internal/apt"
 	"github.com/pete-woods/repohost/internal/deb"
-	"github.com/pete-woods/repohost/internal/storage"
 	"github.com/pete-woods/repohost/internal/testing/debtest"
+	"github.com/pete-woods/repohost/internal/testing/memstore"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 )
 
 func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 	ctx := context.Background()
-	store := newMemStore()
+	store := memstore.New()
 	pub := apt.New(store, apt.Config{
 		Distribution: "stable",
 		Origin:       "Acme",
@@ -52,7 +49,7 @@ func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 	assert.NilError(t, err)
 
 	poolKey := "pool/main/h/hello/hello_2.10_amd64.deb"
-	assert.Check(t, store.has(poolKey), "expected pool object %s", poolKey)
+	assert.Check(t, store.Has(poolKey), "expected pool object %s", poolKey)
 
 	pkgs := readPackages(t, store, "dists/stable/main/binary-amd64/Packages")
 	assert.Assert(t, cmp.Len(pkgs, 1))
@@ -66,7 +63,7 @@ func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 	_, hasSHA256 := entry.Get("SHA256")
 	assert.Check(t, hasSHA256, "Packages stanza must carry a SHA256")
 
-	assert.Check(t, store.has("dists/stable/main/binary-amd64/Packages.gz"))
+	assert.Check(t, store.Has("dists/stable/main/binary-amd64/Packages.gz"))
 
 	release := getString(t, store, "dists/stable/Release")
 	for _, want := range []string{
@@ -84,7 +81,7 @@ func TestAddPublishesPoolPackagesAndRelease(t *testing.T) {
 
 func TestReleaseChecksumsMatchStoredFiles(t *testing.T) {
 	ctx := context.Background()
-	store := newMemStore()
+	store := memstore.New()
 	pub := apt.New(store, apt.Config{Distribution: "stable"})
 
 	err := pub.Add(ctx, "main", bytes.NewReader(debtest.Package(t, "hello", "1.0", "amd64")))
@@ -95,7 +92,7 @@ func TestReleaseChecksumsMatchStoredFiles(t *testing.T) {
 	assert.Assert(t, len(sums) != 0, "Release must list SHA256 checksums")
 
 	for relPath, want := range sums {
-		data, ok := store.get("dists/stable/" + relPath)
+		data, ok := store.Data("dists/stable/" + relPath)
 		assert.Check(t, ok, "Release references missing file %q", relPath)
 		if !ok {
 			continue
@@ -108,14 +105,14 @@ func TestReleaseChecksumsMatchStoredFiles(t *testing.T) {
 
 func TestAddArchitectureAllUsesBinaryAllBucket(t *testing.T) {
 	ctx := context.Background()
-	store := newMemStore()
+	store := memstore.New()
 	pub := apt.New(store, apt.Config{Distribution: "stable"})
 
 	err := pub.Add(ctx, "main", bytes.NewReader(debtest.Package(t, "docs", "1.0", "all")))
 	assert.NilError(t, err)
 
-	assert.Check(t, store.has("pool/main/d/docs/docs_1.0_all.deb"))
-	assert.Check(t, store.has("dists/stable/main/binary-all/Packages"))
+	assert.Check(t, store.Has("pool/main/d/docs/docs_1.0_all.deb"))
+	assert.Check(t, store.Has("dists/stable/main/binary-all/Packages"))
 
 	release := getString(t, store, "dists/stable/Release")
 	archLine := fieldLine(release, "Architectures")
@@ -124,7 +121,7 @@ func TestAddArchitectureAllUsesBinaryAllBucket(t *testing.T) {
 
 func TestRetentionPrunesOldVersions(t *testing.T) {
 	ctx := context.Background()
-	store := newMemStore()
+	store := memstore.New()
 	pub := apt.New(store, apt.Config{Distribution: "stable", KeepVersions: 2})
 
 	for _, v := range []string{"1.0", "1.1", "1.2"} {
@@ -141,14 +138,14 @@ func TestRetentionPrunesOldVersions(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(got, []string{"1.1", "1.2"}))
 
 	// The pruned version's pool object must be deleted, the kept ones retained.
-	assert.Check(t, !store.has("pool/main/h/hello/hello_1.0_amd64.deb"), "old version should be pruned from the pool")
-	assert.Check(t, store.has("pool/main/h/hello/hello_1.1_amd64.deb"))
-	assert.Check(t, store.has("pool/main/h/hello/hello_1.2_amd64.deb"))
+	assert.Check(t, !store.Has("pool/main/h/hello/hello_1.0_amd64.deb"), "old version should be pruned from the pool")
+	assert.Check(t, store.Has("pool/main/h/hello/hello_1.1_amd64.deb"))
+	assert.Check(t, store.Has("pool/main/h/hello/hello_1.2_amd64.deb"))
 }
 
 func TestSignerWritesInReleaseAndDetachedSignature(t *testing.T) {
 	ctx := context.Background()
-	store := newMemStore()
+	store := memstore.New()
 	pub := apt.New(store, apt.Config{Distribution: "stable", Signer: fakeSigner{}})
 
 	err := pub.Add(ctx, "main", bytes.NewReader(debtest.Package(t, "hello", "1.0", "amd64")))
@@ -174,18 +171,18 @@ func (fakeSigner) DetachSign(_ context.Context, _ []byte) ([]byte, error) {
 	return []byte("-----DETACHED SIGNATURE-----"), nil
 }
 
-func readPackages(t testing.TB, s *memStore, key string) []*deb.Package {
+func readPackages(t testing.TB, s *memstore.Store, key string) []*deb.Package {
 	t.Helper()
-	data, ok := s.get(key)
+	data, ok := s.Data(key)
 	assert.Assert(t, ok, "missing index %s", key)
 	pkgs, err := deb.ParseControlFile(data)
 	assert.NilError(t, err)
 	return pkgs
 }
 
-func getString(t testing.TB, s *memStore, key string) string {
+func getString(t testing.TB, s *memstore.Store, key string) string {
 	t.Helper()
-	data, ok := s.get(key)
+	data, ok := s.Data(key)
 	assert.Assert(t, ok, "missing object %s", key)
 	return string(data)
 }
@@ -228,75 +225,4 @@ func parseSHA256Section(release string) map[string]checksum {
 		}
 	}
 	return out
-}
-
-// memStore is an in-memory storage.Store for fast, docker-free tests.
-type memStore struct {
-	mu   sync.Mutex
-	objs map[string][]byte
-}
-
-func newMemStore() *memStore {
-	return &memStore{objs: make(map[string][]byte)}
-}
-
-func (m *memStore) Put(_ context.Context, key string, body io.Reader) error {
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.objs[key] = data
-	return nil
-}
-
-func (m *memStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	data, ok := m.objs[key]
-	if !ok {
-		return nil, fmt.Errorf("memstore get %q: %w", key, storage.ErrNotExist)
-	}
-	return io.NopCloser(bytes.NewReader(data)), nil
-}
-
-func (m *memStore) Delete(_ context.Context, key string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.objs, key)
-	return nil
-}
-
-func (m *memStore) List(_ context.Context, prefix string) ([]storage.Object, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	keys := make([]string, 0, len(m.objs))
-	for k := range m.objs {
-		if strings.HasPrefix(k, prefix) {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-
-	objs := make([]storage.Object, 0, len(keys))
-	for _, k := range keys {
-		objs = append(objs, storage.Object{Key: k, Size: int64(len(m.objs[k]))})
-	}
-	return objs, nil
-}
-
-func (m *memStore) has(key string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.objs[key]
-	return ok
-}
-
-func (m *memStore) get(key string) ([]byte, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	data, ok := m.objs[key]
-	return data, ok
 }

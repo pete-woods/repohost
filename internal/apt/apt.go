@@ -36,22 +36,11 @@ import (
 
 	"github.com/pete-woods/repohost/internal/deb"
 	"github.com/pete-woods/repohost/internal/retention"
+	"github.com/pete-woods/repohost/internal/sign"
 	"github.com/pete-woods/repohost/internal/storage"
 )
 
 const defaultComponent = "main"
-
-// Signer signs the generated Release file. Implementations wrap a GPG key; the
-// library itself takes no crypto dependency. A nil Signer means the repository
-// is published unsigned.
-type Signer interface {
-	// ClearSign returns an inline (clearsigned) signature of data, written as
-	// dists/<distribution>/InRelease.
-	ClearSign(ctx context.Context, data []byte) ([]byte, error)
-	// DetachSign returns a detached, ASCII-armored signature of data, written as
-	// dists/<distribution>/Release.gpg.
-	DetachSign(ctx context.Context, data []byte) ([]byte, error)
-}
 
 // Config configures an apt repository.
 type Config struct {
@@ -67,8 +56,9 @@ type Config struct {
 	// KeepVersions caps how many versions of a package are retained per
 	// component and architecture. Zero keeps all versions.
 	KeepVersions int
-	// Signer, if set, signs the Release file. Optional.
-	Signer Signer
+	// Signer, if set, signs the Release file (InRelease and Release.gpg).
+	// Optional.
+	Signer sign.Signer
 }
 
 // Publisher publishes an apt repository to a Store.

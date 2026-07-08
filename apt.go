@@ -22,13 +22,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pete-woods/repohost/internal/apt"
+	"github.com/pete-woods/repohost/internal/sign"
 	"github.com/pete-woods/repohost/internal/storage/s3store"
 )
 
-// Signer signs an apt repository's Release file. Implement it to wrap your GPG
-// key; repohost itself takes no crypto dependency. Leave APTConfig.Signer nil to
-// publish an unsigned repository.
-type Signer = apt.Signer
+// Signer signs repository metadata. Implement it to wrap your GPG key; repohost
+// itself takes no crypto dependency. Leave the Signer config field nil to
+// publish an unsigned repository. The same Signer works for both apt and yum.
+type Signer = sign.Signer
 
 // APTConfig configures an apt repository. Distribution is required; Components
 // defaults to {"main"}; KeepVersions of zero keeps every version.
