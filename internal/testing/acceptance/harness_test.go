@@ -57,9 +57,8 @@ import (
 )
 
 const (
-	// pkgName is the test package that installs /usr/bin/repohost-hello.
-	pkgName = "repohost-hello"
-	// pkgMarker is what the installed binary prints, proving delivery + install.
+	// pkgMarker is printed (prefixed with the package name) by each installed
+	// test binary, proving that specific package's payload was delivered.
 	pkgMarker = "REPOHOST_OK"
 
 	// composeNetwork is the fixed name of the docker compose default network (set
@@ -68,6 +67,35 @@ const (
 	// seaweedHost is the SeaweedFS service name + in-container S3 port.
 	seaweedHost = "seaweedfs:9123"
 )
+
+// pkgSpec is a test package published in several versions. latest is the version
+// a package manager should select and install.
+type pkgSpec struct {
+	name     string
+	versions []string
+	latest   string
+}
+
+// testPackages is the set the acceptance tests publish: multiple distinct names,
+// each in several versions (one with three, to also exercise version ordering),
+// so we verify the repository indexes and serves more than one package and picks
+// the newest version of each independently.
+func testPackages() []pkgSpec {
+	return []pkgSpec{
+		{name: "repohost-hello", versions: []string{"1.0.0", "1.1.0"}, latest: "1.1.0"},
+		{name: "repohost-tool", versions: []string{"0.9.0", "2.0.0", "2.0.1"}, latest: "2.0.1"},
+	}
+}
+
+// packageNames returns just the names, for a single install command.
+func packageNames() []string {
+	specs := testPackages()
+	names := make([]string, 0, len(specs))
+	for _, p := range specs {
+		names = append(names, p.name)
+	}
+	return names
+}
 
 // harness is a repository backend with a fresh bucket, ready for publishing.
 // baseURL is how client containers reach the repository root over the compose
@@ -165,34 +193,38 @@ func (s *lineStreamer) flush() {
 	}
 }
 
-// buildDeb builds a real .deb for the package at the given version and host arch.
-func buildDeb(t *testing.T, version string) []byte {
+// buildDeb builds a real .deb for the named package at the given version and
+// host arch.
+func buildDeb(t *testing.T, name, version string) []byte {
 	t.Helper()
-	return buildPackage(t, "deb", version)
+	return buildPackage(t, "deb", name, version)
 }
 
-// buildRPM builds a real .rpm for the package at the given version and host arch.
-func buildRPM(t *testing.T, version string) []byte {
+// buildRPM builds a real .rpm for the named package at the given version and
+// host arch.
+func buildRPM(t *testing.T, name, version string) []byte {
 	t.Helper()
-	return buildPackage(t, "rpm", version)
+	return buildPackage(t, "rpm", name, version)
 }
 
-func buildPackage(t *testing.T, format, version string) []byte {
+func buildPackage(t *testing.T, format, name, version string) []byte {
 	t.Helper()
 
-	script := filepath.Join(t.TempDir(), pkgName)
-	err := os.WriteFile(script, []byte("#!/bin/sh\necho "+pkgMarker+"\n"), 0o755)
+	// The binary echoes "<name> REPOHOST_OK" so verification confirms this exact
+	// package's payload was delivered, not just that some package installed.
+	script := filepath.Join(t.TempDir(), name)
+	err := os.WriteFile(script, []byte("#!/bin/sh\necho "+name+" "+pkgMarker+"\n"), 0o755)
 	assert.NilError(t, err)
 
 	info := nfpm.WithDefaults(&nfpm.Info{
-		Name:        pkgName,
+		Name:        name,
 		Arch:        hostArch(),
 		Version:     version,
 		Maintainer:  "repohost tests <test@example.com>",
 		Description: "repohost acceptance test package",
 		Overridables: nfpm.Overridables{
 			Contents: files.Contents{
-				{Source: script, Destination: "/usr/bin/" + pkgName},
+				{Source: script, Destination: "/usr/bin/" + name},
 			},
 		},
 	})
