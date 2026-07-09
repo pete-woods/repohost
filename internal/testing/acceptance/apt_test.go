@@ -28,10 +28,12 @@ import (
 	"gotest.tools/v3/assert/cmp"
 )
 
-// TestAcceptanceAPT publishes two versions of a real, signed .deb repository
-// through repohost.APT to SeaweedFS, then installs it from a real debian
-// container via apt-get with signature verification enabled (signed-by, no
-// trusted=yes). Each phase is a subtest so its timing shows in the output.
+// TestAcceptanceAPT publishes several distinct signed .deb packages — each in
+// multiple versions — through repohost.APT to SeaweedFS, then installs them all
+// from a real debian container via apt-get with signature verification enabled
+// (signed-by, no trusted=yes). It confirms multiple package names coexist in one
+// index and that apt selects the newest version of each independently. Each phase
+// is a subtest so its timing shows in the output.
 func TestAcceptanceAPT(t *testing.T) {
 	ctx := context.Background()
 
@@ -39,16 +41,18 @@ func TestAcceptanceAPT(t *testing.T) {
 	client := h.startClient(ctx, t, "debian:bookworm-slim")
 	signer, publicKey := generateSigner(t)
 
-	t.Run("publish two versions (signed)", func(t *testing.T) {
+	t.Run("publish packages (signed)", func(t *testing.T) {
 		apt := repohost.NewAPT(h.backend, repohost.APTConfig{
 			Distribution: "stable",
 			Origin:       "repohost",
 			Label:        "repohost",
 			Signer:       signer,
 		})
-		for _, version := range []string{"1.0.0", "1.1.0"} {
-			err := apt.Add(ctx, "main", bytes.NewReader(buildDeb(t, version)))
-			assert.NilError(t, err, "publish deb %s", version)
+		for _, p := range testPackages() {
+			for _, version := range p.versions {
+				err := apt.Add(ctx, "main", bytes.NewReader(buildDeb(t, p.name, version)))
+				assert.NilError(t, err, "publish deb %s %s", p.name, version)
+			}
 		}
 	})
 
@@ -68,14 +72,16 @@ func TestAcceptanceAPT(t *testing.T) {
 	})
 
 	t.Run("apt-get install", func(t *testing.T) {
-		execOK(ctx, t, client, "apt-get", "install", "-y", pkgName)
+		execOK(ctx, t, client, append([]string{"apt-get", "install", "-y"}, packageNames()...)...)
 	})
 
-	t.Run("verify installed package", func(t *testing.T) {
-		out := execOK(ctx, t, client, pkgName)
-		assert.Check(t, cmp.Contains(out, pkgMarker), "installed binary should run")
+	t.Run("verify installed packages", func(t *testing.T) {
+		for _, p := range testPackages() {
+			out := execOK(ctx, t, client, p.name)
+			assert.Check(t, cmp.Contains(out, p.name+" "+pkgMarker), "installed binary %s should run", p.name)
 
-		version := execOK(ctx, t, client, "dpkg-query", "-W", "-f=${Version}", pkgName)
-		assert.Check(t, cmp.Equal(strings.TrimSpace(version), "1.1.0"), "newest published version should be installed")
+			version := execOK(ctx, t, client, "dpkg-query", "-W", "-f=${Version}", p.name)
+			assert.Check(t, cmp.Equal(strings.TrimSpace(version), p.latest), "%s: newest published version should be installed", p.name)
+		}
 	})
 }

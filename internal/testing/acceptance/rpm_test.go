@@ -28,10 +28,12 @@ import (
 	"gotest.tools/v3/assert/cmp"
 )
 
-// TestAcceptanceYUM publishes two versions of a real, signed .rpm repository
-// through repohost.YUM to SeaweedFS, then installs it from a real fedora
-// container via dnf with repository signature verification enabled
-// (repo_gpgcheck=1). Each phase is a subtest so its timing shows in the output.
+// TestAcceptanceYUM publishes several distinct signed .rpm packages — each in
+// multiple versions — through repohost.YUM to SeaweedFS, then installs them all
+// from a real fedora container via dnf with repository signature verification
+// enabled (repo_gpgcheck=1). It confirms multiple package names coexist in one
+// repository's metadata and that dnf selects the newest version of each
+// independently. Each phase is a subtest so its timing shows in the output.
 func TestAcceptanceYUM(t *testing.T) {
 	ctx := context.Background()
 
@@ -39,11 +41,13 @@ func TestAcceptanceYUM(t *testing.T) {
 	client := h.startClient(ctx, t, "fedora:41")
 	signer, publicKey := generateSigner(t)
 
-	t.Run("publish two versions (signed)", func(t *testing.T) {
+	t.Run("publish packages (signed)", func(t *testing.T) {
 		repo := repohost.NewYUM(h.backend, repohost.YUMConfig{Signer: signer})
-		for _, version := range []string{"1.0.0", "1.1.0"} {
-			err := repo.Add(ctx, bytes.NewReader(buildRPM(t, version)))
-			assert.NilError(t, err, "publish rpm %s", version)
+		for _, p := range testPackages() {
+			for _, version := range p.versions {
+				err := repo.Add(ctx, bytes.NewReader(buildRPM(t, p.name, version)))
+				assert.NilError(t, err, "publish rpm %s %s", p.name, version)
+			}
 		}
 	})
 
@@ -62,14 +66,17 @@ func TestAcceptanceYUM(t *testing.T) {
 
 	t.Run("dnf install", func(t *testing.T) {
 		// Enable only our repository so the install is hermetic (no external mirrors).
-		execOK(ctx, t, client, "dnf", "install", "-y", "--disablerepo=*", "--enablerepo=repohost", pkgName)
+		args := append([]string{"dnf", "install", "-y", "--disablerepo=*", "--enablerepo=repohost"}, packageNames()...)
+		execOK(ctx, t, client, args...)
 	})
 
-	t.Run("verify installed package", func(t *testing.T) {
-		out := execOK(ctx, t, client, pkgName)
-		assert.Check(t, cmp.Contains(out, pkgMarker), "installed binary should run")
+	t.Run("verify installed packages", func(t *testing.T) {
+		for _, p := range testPackages() {
+			out := execOK(ctx, t, client, p.name)
+			assert.Check(t, cmp.Contains(out, p.name+" "+pkgMarker), "installed binary %s should run", p.name)
 
-		version := execOK(ctx, t, client, "rpm", "-q", "--qf", "%{VERSION}", pkgName)
-		assert.Check(t, cmp.Equal(strings.TrimSpace(version), "1.1.0"), "newest published version should be installed")
+			version := execOK(ctx, t, client, "rpm", "-q", "--qf", "%{VERSION}", p.name)
+			assert.Check(t, cmp.Equal(strings.TrimSpace(version), p.latest), "%s: newest published version should be installed", p.name)
+		}
 	})
 }
