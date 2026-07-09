@@ -1,7 +1,9 @@
 name: Go
 
 on:
-  push: {}
+  # Branches only (not tags) so the tag ci:release pushes doesn't retrigger CI.
+  push:
+    branches: ['**']
   pull_request: {}
 
 permissions:
@@ -57,6 +59,31 @@ jobs:
         if: always()
         run: task compose-down
 
+  build:
+    name: Build
+    # Pre-merge validation only; on main the release job builds via GoReleaser.
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      # Snapshot build (all platforms + archives) validates the release pipeline
+      # on every push and PR, so a broken .goreleaser.yml is caught before a tag.
+      - name: Snapshot release build
+        run: task ci:build
+
   release:
     name: Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -71,14 +98,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          # Full history so tags are available to compute the next version
-          # and the changelog range.
+          # Full history so existing tags are available to compute the next
+          # version and the changelog range.
           fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: Set up Task
         uses: go-task/setup-task@v2
 
-      - name: Tag and release
+      - name: Auto-tag and release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: task ci:release

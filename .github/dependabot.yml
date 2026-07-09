@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: "weekly"
 
+  # The build/release tooling (goreleaser, golangci-lint, etc.) lives in a
+  # separate module so it stays out of the library's dependency graph.
+  - package-ecosystem: "gomod"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

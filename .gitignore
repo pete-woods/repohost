@@ -11,3 +11,5 @@ Thumbs.db
 # Test coverage
 coverage.out
 coverage.xml
+
+/dist

@@ -47,6 +47,7 @@ tasks:
       - task: mod-tidy
         vars:
           CLI_ARGS: -diff
+      - task: release-check
 
   fix:
     desc: Auto-fix static checks
@@ -57,6 +58,11 @@ tasks:
       - task: lint
         vars:
           CLI_ARGS: ./... --fix
+
+  release-check:
+    desc: Check if the release is ready to be published
+    cmds:
+      - go tool -modfile tools/go.mod goreleaser check
 
   lint:
     desc: Run golangci-lint
@@ -117,33 +123,6 @@ tasks:
           CLI_ARGS: -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - go tool -modfile tools/go.mod gocover-cobertura < coverage.out > coverage.xml
 
-  ci:release:
-    desc: Tag and create a GitHub release with an auto-incremented v0.1.x version
-    cmds:
-      - |
-        latest="$(git tag --list 'v0.1.*' --sort=-version:refname | head -n1)"
-        if [ -n "$latest" ]; then
-          next="v0.1.$(( ${latest##*.} + 1 ))"
-          range="${latest}..HEAD"
-        else
-          next="v0.1.0"
-          range="HEAD"
-        fi
-
-        notes="$(mktemp)"
-        {
-          echo "## Changelog"
-          echo
-          git log --no-merges --pretty='- %h %s' "$range"
-          echo
-        } > "$notes"
-
-        gh release create "$next" \
-          --target "${GITHUB_SHA:-$(git rev-parse HEAD)}" \
-          --title "$next" \
-          --notes-file "$notes" \
-          --generate-notes
-
   ci:check:
     desc: Check no uncommitted diffs after generate/fmt/tidy
     cmds:
@@ -156,3 +135,27 @@ tasks:
           CLI_ARGS: -diff
       - task: generate
       - git diff --exit-code
+
+
+  ci:release:
+    desc: Auto-tag the next v0.1.x patch on the current commit and publish it with GoReleaser
+    cmds:
+      # GoReleaser releases an existing tag; it does not create one. So compute
+      # the next patch version, tag HEAD, push the tag, then release it.
+      - |
+        set -eu
+        latest="$(git tag --list 'v0.1.*' --sort=-version:refname | head -n1)"
+        if [ -n "$latest" ]; then
+          next="v0.1.$(( ${latest##*.} + 1 ))"
+        else
+          next="v0.1.0"
+        fi
+        echo "Releasing $next"
+        git tag "$next"
+        git push origin "$next"
+        go tool -modfile tools/go.mod goreleaser release --clean
+
+  ci:build:
+    desc: Dry-run a release — build a snapshot (incl. nfpms) and dry-run the packagecloud publish
+    cmds:
+      - go tool -modfile tools/go.mod goreleaser release --snapshot --clean
