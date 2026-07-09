@@ -57,7 +57,7 @@ func TestAcceptance(t *testing.T) {
 	h := setup(ctx, t)
 	signer, publicKey := generateSigner(t)
 
-	t.Run("publish deb + rpm to one bucket (signed)", func(t *testing.T) {
+	published := t.Run("publish deb + rpm to one bucket (signed)", func(t *testing.T) {
 		apt := repohost.NewAPT(h.backend, repohost.APTConfig{
 			Distribution: "stable",
 			Origin:       "repohost",
@@ -79,69 +79,83 @@ func TestAcceptance(t *testing.T) {
 			}
 		}
 	})
+	assert.Assert(t, published)
 
 	t.Run("debian: apt install + retention", func(t *testing.T) {
 		client := h.startClient(ctx, t, "debian:bookworm-slim")
 
-		// Configure a signed-by apt source (real signature verification, no
-		// trusted=yes), pointed at the shared repository root.
-		execOK(ctx, t, client, "sh", "-c",
-			"rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && mkdir -p /etc/apt/keyrings")
-		err := client.CopyToContainer(ctx, publicKey, "/etc/apt/keyrings/repohost.asc", 0o644)
-		assert.NilError(t, err)
-		sources := fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/repohost.asc] %s stable main\n", h.baseURL)
-		err = client.CopyToContainer(ctx, []byte(sources), "/etc/apt/sources.list.d/repohost.list", 0o644)
-		assert.NilError(t, err)
+		configured := t.Run("configure a signed apt source", func(t *testing.T) {
+			// signed-by (not trusted=yes) means apt actually verifies the signature.
+			execOK(ctx, t, client, "sh", "-c",
+				"rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && mkdir -p /etc/apt/keyrings")
+			err := client.CopyToContainer(ctx, publicKey, "/etc/apt/keyrings/repohost.asc", 0o644)
+			assert.NilError(t, err)
+			sources := fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/repohost.asc] %s stable main\n", h.baseURL)
+			err = client.CopyToContainer(ctx, []byte(sources), "/etc/apt/sources.list.d/repohost.list", 0o644)
+			assert.NilError(t, err)
+		})
+		assert.Assert(t, configured)
 
-		execOK(ctx, t, client, "apt-get", "update")
-		execOK(ctx, t, client, append([]string{"apt-get", "install", "-y"}, packageNames()...)...)
+		installed := t.Run("apt-get update and install", func(t *testing.T) {
+			execOK(ctx, t, client, "apt-get", "update")
+			execOK(ctx, t, client, append([]string{"apt-get", "install", "-y"}, packageNames()...)...)
+		})
+		assert.Assert(t, installed)
 
-		for _, p := range testPackages() {
-			out := execOK(ctx, t, client, p.name)
-			assert.Check(t, cmp.Contains(out, p.name+" "+pkgMarker), "installed binary %s should run", p.name)
+		t.Run("each package installs at its newest version", func(t *testing.T) {
+			for _, p := range testPackages() {
+				out := execOK(ctx, t, client, p.name)
+				assert.Check(t, cmp.Contains(out, p.name+" "+pkgMarker), "%s binary", p.name)
 
-			version := execOK(ctx, t, client, "dpkg-query", "-W", "-f=${Version}", p.name)
-			assert.Check(t, cmp.Equal(strings.TrimSpace(version), p.latest), "%s: newest published version should be installed", p.name)
-		}
+				version := execOK(ctx, t, client, "dpkg-query", "-W", "-f=${Version}", p.name)
+				assert.Check(t, cmp.Equal(strings.TrimSpace(version), p.latest), "%s version", p.name)
+			}
+		})
 
-		// Retention: apt-cache madison lists the versions the served index offers.
-		// KeepVersions=2 kept 2.0.0 + 2.0.1 and evicted 0.9.0, so the retained
-		// ones must be present (proving it kept two, not one) and the evicted one
-		// absent.
-		madison := execOK(ctx, t, client, "apt-cache", "madison", "repohost-tool")
-		assert.Check(t, cmp.Contains(madison, "2.0.1"), "retained newest should be offered")
-		assert.Check(t, cmp.Contains(madison, "2.0.0"), "retained second-newest should be offered")
-		assert.Check(t, !strings.Contains(madison, evictedVersion), "evicted version must not be offered")
+		t.Run("index offers the retained versions, not the evicted one", func(t *testing.T) {
+			madison := execOK(ctx, t, client, "apt-cache", "madison", "repohost-tool")
+			assert.Check(t, cmp.Contains(madison, "2.0.1"))
+			assert.Check(t, cmp.Contains(madison, "2.0.0"))
+			assert.Check(t, !strings.Contains(madison, evictedVersion))
+		})
 	})
 
 	t.Run("fedora: dnf install + retention", func(t *testing.T) {
 		client := h.startClient(ctx, t, "fedora:41")
 
-		// repo_gpgcheck=1 verifies repomd.xml.asc against gpgkey; gpgcheck=0 skips
-		// per-package RPM signatures (not the repo host's concern).
-		execOK(ctx, t, client, "mkdir", "-p", "/etc/pki/rpm-gpg")
-		err := client.CopyToContainer(ctx, publicKey, "/etc/pki/rpm-gpg/repohost.asc", 0o644)
-		assert.NilError(t, err)
-		repoFile := fmt.Sprintf("[repohost]\nname=repohost\nbaseurl=%s/\nenabled=1\ngpgcheck=0\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/repohost.asc\n", h.baseURL)
-		err = client.CopyToContainer(ctx, []byte(repoFile), "/etc/yum.repos.d/repohost.repo", 0o644)
-		assert.NilError(t, err)
+		configured := t.Run("configure a signed dnf repo", func(t *testing.T) {
+			execOK(ctx, t, client, "mkdir", "-p", "/etc/pki/rpm-gpg")
+			err := client.CopyToContainer(ctx, publicKey, "/etc/pki/rpm-gpg/repohost.asc", 0o644)
+			assert.NilError(t, err)
+			// repo_gpgcheck=1 verifies repomd.xml.asc against gpgkey; gpgcheck=0 skips
+			// per-package RPM signatures (not the repo host's concern).
+			repoFile := fmt.Sprintf("[repohost]\nname=repohost\nbaseurl=%s/\nenabled=1\ngpgcheck=0\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/repohost.asc\n", h.baseURL)
+			err = client.CopyToContainer(ctx, []byte(repoFile), "/etc/yum.repos.d/repohost.repo", 0o644)
+			assert.NilError(t, err)
+		})
+		assert.Assert(t, configured)
 
-		// Enable only our repository so the install is hermetic (no external mirrors).
-		execOK(ctx, t, client, append([]string{"dnf", "install", "-y", "--disablerepo=*", "--enablerepo=repohost"}, packageNames()...)...)
+		installed := t.Run("dnf install", func(t *testing.T) {
+			// Enable only our repository so the install is hermetic (no external mirrors).
+			execOK(ctx, t, client, append([]string{"dnf", "install", "-y", "--disablerepo=*", "--enablerepo=repohost"}, packageNames()...)...)
+		})
+		assert.Assert(t, installed)
 
-		for _, p := range testPackages() {
-			out := execOK(ctx, t, client, p.name)
-			assert.Check(t, cmp.Contains(out, p.name+" "+pkgMarker), "installed binary %s should run", p.name)
+		t.Run("each package installs at its newest version", func(t *testing.T) {
+			for _, p := range testPackages() {
+				out := execOK(ctx, t, client, p.name)
+				assert.Check(t, cmp.Contains(out, p.name+" "+pkgMarker), "%s binary", p.name)
 
-			version := execOK(ctx, t, client, "rpm", "-q", "--qf", "%{VERSION}", p.name)
-			assert.Check(t, cmp.Equal(strings.TrimSpace(version), p.latest), "%s: newest published version should be installed", p.name)
-		}
+				version := execOK(ctx, t, client, "rpm", "-q", "--qf", "%{VERSION}", p.name)
+				assert.Check(t, cmp.Equal(strings.TrimSpace(version), p.latest), "%s version", p.name)
+			}
+		})
 
-		// Retention, same expectation as the apt side: dnf --showduplicates lists
-		// every version the repo offers; 2.0.0 + 2.0.1 retained, 0.9.0 evicted.
-		list := execOK(ctx, t, client, "dnf", "--disablerepo=*", "--enablerepo=repohost", "list", "--showduplicates", "repohost-tool")
-		assert.Check(t, cmp.Contains(list, "2.0.1"), "retained newest should be offered")
-		assert.Check(t, cmp.Contains(list, "2.0.0"), "retained second-newest should be offered")
-		assert.Check(t, !strings.Contains(list, evictedVersion), "evicted version must not be offered")
+		t.Run("index offers the retained versions, not the evicted one", func(t *testing.T) {
+			list := execOK(ctx, t, client, "dnf", "--disablerepo=*", "--enablerepo=repohost", "list", "--showduplicates", "repohost-tool")
+			assert.Check(t, cmp.Contains(list, "2.0.1"))
+			assert.Check(t, cmp.Contains(list, "2.0.0"))
+			assert.Check(t, !strings.Contains(list, evictedVersion))
+		})
 	})
 }
