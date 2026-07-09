@@ -70,6 +70,47 @@ func TestYUMPublishAndRetention(t *testing.T) {
 	assert.Check(t, cmp.Contains(primaryXML, `href="Packages/h/hello-2.0-1.x86_64.rpm"`))
 }
 
+// TestYUMRemove adds two versions of a package (keeping both), then removes the
+// older one explicitly and checks the RPM and its primary.xml entry are gone
+// while the other version survives.
+func TestYUMRemove(t *testing.T) {
+	ctx := context.Background()
+	fix := s3test.Default(ctx, t)
+
+	repo := repohost.NewYUM(repohost.S3(fix.Client, fix.Bucket), repohost.YUMConfig{})
+	for _, version := range []string{"1.0", "2.0"} {
+		rpmData := rpmtest.Build(t, rpmtest.Options{
+			Name: "hello", Version: version, Release: "1", Arch: "x86_64",
+			Summary:  "A greeting",
+			Provides: []rpmtest.Dep{{Name: "hello", Flags: 8, Version: version + "-1"}},
+			Files:    []rpmtest.FileEntry{{Path: "/usr/bin/hello"}},
+		})
+		err := repo.Add(ctx, bytes.NewReader(rpmData))
+		assert.NilError(t, err, "add hello %s", version)
+	}
+
+	removed, err := repo.Remove(ctx, "hello", "1.0")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(removed, 1))
+
+	gone := objectExists(ctx, t, fix, "Packages/h/hello-1.0-1.x86_64.rpm")
+	assert.Check(t, !gone, "removed version's RPM should be deleted")
+	survivor := objectExists(ctx, t, fix, "Packages/h/hello-2.0-1.x86_64.rpm")
+	assert.Check(t, survivor, "other version should remain")
+
+	repomd := string(getObject(ctx, t, fix, "repodata/repomd.xml"))
+	primaryHref := hrefForType(repomd, "primary")
+	assert.Assert(t, primaryHref != "", "repomd must reference a primary index")
+	primaryXML := string(gunzipBytes(t, getObject(ctx, t, fix, primaryHref)))
+	assert.Check(t, !strings.Contains(primaryXML, `ver="1.0"`), "removed version must leave primary.xml")
+	assert.Check(t, cmp.Contains(primaryXML, `ver="2.0"`))
+
+	// Removing an absent version is a no-op, not an error.
+	none, err := repo.Remove(ctx, "hello", "9.9")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(none, 0))
+}
+
 // hrefForType extracts the location href of a repomd <data> element by type. It
 // is a deliberately small scan, sufficient for the test's known-good output.
 func hrefForType(repomd, typ string) string {

@@ -15,6 +15,7 @@ require (
 	github.com/goreleaser/nfpm/v2 v2.47.0
 	github.com/klauspost/compress v1.19.0
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	github.com/ulikunitz/xz v0.5.15
 	google.golang.org/api v0.287.1
 	gotest.tools/v3 v3.5.2
@@ -119,7 +120,6 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect

@@ -119,6 +119,80 @@ func (p *Publisher) Add(ctx context.Context, component string, r io.Reader) erro
 	return p.publishRelease(ctx)
 }
 
+// Remove deletes every package matching name and version from the component
+// (empty means "main") — across all architectures — dropping both the pool
+// files and the Packages index entries, then republishes (and re-signs) the
+// Release. It returns the number of packages removed. Removing a version that is
+// not present is not an error (it returns 0). The single writer is the caller's
+// responsibility.
+func (p *Publisher) Remove(ctx context.Context, component, name, version string) (int, error) {
+	if component == "" {
+		component = defaultComponent
+	}
+
+	// The architectures a package spans aren't known up front, so scan the
+	// component's per-architecture Packages indexes.
+	prefix := path.Join("dists", p.cfg.Distribution, component) + "/"
+	objs, err := p.store.List(ctx, prefix)
+	if err != nil {
+		return 0, err
+	}
+
+	removed := 0
+	for _, o := range objs {
+		if path.Base(o.Key) != "Packages" {
+			continue // skip Packages.gz; it is regenerated from Packages
+		}
+
+		existing, err := p.readPackages(ctx, o.Key)
+		if err != nil {
+			return removed, err
+		}
+
+		kept := make([]*deb.Package, 0, len(existing))
+		var drop []*deb.Package
+		for _, pk := range existing {
+			if pk.Name == name && pk.Version == version {
+				drop = append(drop, pk)
+				continue
+			}
+			kept = append(kept, pk)
+		}
+		if len(drop) == 0 {
+			continue
+		}
+
+		for _, pk := range drop {
+			if fn, ok := pk.Get("Filename"); ok {
+				if err := p.store.Delete(ctx, fn); err != nil {
+					return removed, err
+				}
+			}
+		}
+		removed += len(drop)
+
+		content := buildPackages(kept)
+		if err := p.store.Put(ctx, o.Key, bytes.NewReader(content)); err != nil {
+			return removed, err
+		}
+		gz, err := gzipBytes(content)
+		if err != nil {
+			return removed, err
+		}
+		if err := p.store.Put(ctx, o.Key+".gz", bytes.NewReader(gz)); err != nil {
+			return removed, err
+		}
+	}
+
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := p.publishRelease(ctx); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
 // updateIndex loads the Packages index for the entry's component and
 // architecture, inserts the entry (replacing any identical name+version),
 // applies retention, deletes pruned pool objects, and writes Packages{,.gz}.

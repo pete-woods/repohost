@@ -49,3 +49,11 @@ func NewAPT(backend Backend, cfg APTConfig) *APT {
 func (a *APT) Add(ctx context.Context, component string, deb io.Reader) error {
 	return a.publisher.Add(ctx, component, deb)
 }
+
+// Remove deletes every package matching name and version from the component
+// ("" means "main"), across all architectures, and republishes the Release
+// (re-signing it if a Signer is configured). It returns the number of packages
+// removed; removing a version that is not present returns 0 without error.
+func (a *APT) Remove(ctx context.Context, component, name, version string) (int, error) {
+	return a.publisher.Remove(ctx, component, name, version)
+}

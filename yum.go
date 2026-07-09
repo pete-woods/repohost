@@ -43,3 +43,11 @@ func NewYUM(backend Backend, cfg YUMConfig) *YUM {
 func (y *YUM) Add(ctx context.Context, rpm io.Reader) error {
 	return y.publisher.Add(ctx, rpm)
 }
+
+// Remove deletes every package matching name and version (across all
+// architectures) and regenerates the repodata (re-signing it if a Signer is
+// configured). It returns the number of packages removed; removing a version
+// that is not present returns 0 without error.
+func (y *YUM) Remove(ctx context.Context, name, version string) (int, error) {
+	return y.publisher.Remove(ctx, name, version)
+}

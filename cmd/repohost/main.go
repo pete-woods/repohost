@@ -24,8 +24,12 @@ import (
 	"github.com/pete-woods/repohost/internal/cli"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=..."; see
+// .goreleaser.yml. It defaults to "dev" for `go build`/`go install`.
+var version = "dev"
+
 func main() {
-	if err := cli.Execute(); err != nil {
+	if err := cli.Execute(version); err != nil {
 		os.Exit(1)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
@@ -125,6 +126,28 @@ func TestAcceptanceCLI(t *testing.T) {
 		})
 
 		t.Run("Release is signed (InRelease)", func(t *testing.T) {
+			inRelease := s3Exists(ctx, t, fix, "dists/stable/InRelease")
+			assert.Check(t, inRelease)
+		})
+	})
+
+	t.Run("deb rm removes a version and re-signs", func(t *testing.T) {
+		removed := t.Run("rm succeeds", func(t *testing.T) {
+			args := append([]string{"rm", "deb", "--distribution", "stable", "--sign-key", keyPath}, s3Flags...)
+			args = append(args, "repohost-hello", "1.0.0")
+			res := icmd.RunCmd(icmd.Command(bin, args...), icmd.WithEnv(env...))
+			assert.Check(t, res.Equal(icmd.Success))
+		})
+		assert.Assert(t, removed)
+
+		t.Run("removed version is gone, newest remains", func(t *testing.T) {
+			arch := hostArch()
+			packages := string(s3Get(ctx, t, fix, "dists/stable/main/binary-"+arch+"/Packages"))
+			assert.Check(t, !strings.Contains(packages, "Version: 1.0.0"))
+			assert.Check(t, cmp.Contains(packages, "Version: 1.1.0"))
+		})
+
+		t.Run("Release re-signed (InRelease present)", func(t *testing.T) {
 			inRelease := s3Exists(ctx, t, fix, "dists/stable/InRelease")
 			assert.Check(t, inRelease)
 		})

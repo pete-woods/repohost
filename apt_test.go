@@ -74,6 +74,39 @@ func TestAPTPublishAndRetention(t *testing.T) {
 	assert.Check(t, cmp.Contains(release, "main/binary-amd64/Packages"))
 }
 
+// TestAPTRemove adds two versions of a package (keeping both), then removes the
+// older one explicitly and checks the pool file and index entry are gone while
+// the other version survives and the Release is republished.
+func TestAPTRemove(t *testing.T) {
+	ctx := context.Background()
+	fix := s3test.Default(ctx, t)
+
+	repo := repohost.NewAPT(repohost.S3(fix.Client, fix.Bucket), repohost.APTConfig{Distribution: "stable"})
+	for _, version := range []string{"1.0", "1.1"} {
+		deb := debtest.Package(t, "hello", version, "amd64")
+		err := repo.Add(ctx, "main", bytes.NewReader(deb))
+		assert.NilError(t, err, "add hello %s", version)
+	}
+
+	removed, err := repo.Remove(ctx, "main", "hello", "1.0")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(removed, 1))
+
+	gone := objectExists(ctx, t, fix, "pool/main/h/hello/hello_1.0_amd64.deb")
+	assert.Check(t, !gone, "removed version's pool file should be deleted")
+	survivor := objectExists(ctx, t, fix, "pool/main/h/hello/hello_1.1_amd64.deb")
+	assert.Check(t, survivor, "other version should remain")
+
+	packages := string(getObject(ctx, t, fix, "dists/stable/main/binary-amd64/Packages"))
+	assert.Check(t, !strings.Contains(packages, "Version: 1.0"), "removed version must leave the index")
+	assert.Check(t, cmp.Contains(packages, "Version: 1.1"))
+
+	// Removing an absent version is a no-op, not an error.
+	none, err := repo.Remove(ctx, "main", "hello", "9.9")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(none, 0))
+}
+
 func getObject(ctx context.Context, t *testing.T, fix *s3test.Fixture, key string) []byte {
 	t.Helper()
 	out, err := fix.Client.GetObject(ctx, &s3.GetObjectInput{

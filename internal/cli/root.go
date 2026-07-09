@@ -29,21 +29,22 @@ import (
 
 // Execute builds the root command, runs it, and returns any error. Errors are
 // logged (structured) here rather than printed by cobra, so all output shares
-// one format.
-func Execute() error {
-	err := newRootCmd().Execute()
+// one format. version is surfaced through --version.
+func Execute(version string) error {
+	err := newRootCmd(version).Execute()
 	if err != nil {
 		slog.Error("command failed", "error", err)
 	}
 	return err
 }
 
-func newRootCmd() *cobra.Command {
+func newRootCmd(version string) *cobra.Command {
 	var logLevel, logFormat string
 
 	root := &cobra.Command{
-		Use:   "repohost",
-		Short: "Publish apt and yum/dnf package repositories to cloud object storage",
+		Use:     "repohost",
+		Version: version,
+		Short:   "Publish apt and yum/dnf package repositories to cloud object storage",
 		Long: "repohost publishes Debian (apt) and RPM (yum/dnf) package repositories\n" +
 			"to an S3 or GCS bucket. Point apt-get or dnf at the bucket's public URL.",
 		// Errors are logged by Execute; usage on a runtime error is just noise.
@@ -63,7 +64,7 @@ func newRootCmd() *cobra.Command {
 	pf.StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 	pf.StringVar(&logFormat, "log-format", "text", "log format (text, json)")
 
-	root.AddCommand(newPushCmd())
+	root.AddCommand(newPushCmd(), newRemoveCmd())
 	return root
 }
 

@@ -117,6 +117,41 @@ func (p *Publisher) Add(ctx context.Context, r io.Reader) error {
 	return p.publish(ctx, entries)
 }
 
+// Remove deletes every package matching name and version (across all
+// architectures and releases of that version), drops the RPM files, and
+// regenerates (and re-signs) the repodata. It returns the number of packages
+// removed. Removing a version that is not present is not an error (it returns
+// 0). The single writer is the caller's responsibility.
+func (p *Publisher) Remove(ctx context.Context, name, version string) (int, error) {
+	entries, err := p.loadState(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	kept := make([]packageEntry, 0, len(entries))
+	var drop []packageEntry
+	for _, e := range entries {
+		if e.Meta.Name == name && e.Meta.Version == version {
+			drop = append(drop, e)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if len(drop) == 0 {
+		return 0, nil
+	}
+
+	for _, e := range drop {
+		if err := p.store.Delete(ctx, e.Location); err != nil {
+			return 0, err
+		}
+	}
+	if err := p.publish(ctx, kept); err != nil {
+		return len(drop), err
+	}
+	return len(drop), nil
+}
+
 // publish renders and writes the repodata, signs repomd.xml, persists the state
 // manifest, and removes any stale metadata files.
 func (p *Publisher) publish(ctx context.Context, entries []packageEntry) error {

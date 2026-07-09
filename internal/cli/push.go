@@ -29,6 +29,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/pete-woods/repohost"
 	"github.com/pete-woods/repohost/pgp"
@@ -39,17 +40,34 @@ import (
 // or in shell history. (The value is a variable name, not a secret.)
 const signPassphraseEnv = "REPOHOST_SIGN_PASSPHRASE" //nolint:gosec // G101: env var name, not a credential
 
-// pushOptions holds the flags shared by every push subcommand: which backend
-// and bucket to write to, retention, signing, and dry-run.
+// backendOptions holds the flags common to every repository-mutating command:
+// which backend and bucket to target, signing, and dry-run. push and rm both
+// embed or use it.
+type backendOptions struct {
+	backend   string
+	bucket    string
+	endpoint  string
+	region    string
+	pathStyle bool
+	signKey   string
+	dryRun    bool
+}
+
+func (o *backendOptions) addFlags(pf *pflag.FlagSet) {
+	pf.StringVar(&o.backend, "backend", "s3", "storage backend (s3, gcs)")
+	pf.StringVar(&o.bucket, "bucket", "", "destination bucket (required)")
+	pf.StringVar(&o.endpoint, "endpoint", "", "S3-compatible endpoint URL, e.g. for MinIO/SeaweedFS (optional)")
+	pf.StringVar(&o.region, "region", "", "S3 region (defaults to the AWS environment)")
+	pf.BoolVar(&o.pathStyle, "s3-path-style", false, "use path-style S3 addressing (needed by most S3-compatible services)")
+	pf.StringVar(&o.signKey, "sign-key", "", "path to an ASCII-armored PGP private key to sign the repository; passphrase via "+signPassphraseEnv)
+	pf.BoolVar(&o.dryRun, "dry-run", false, "log the intended actions without writing anything")
+}
+
+// pushOptions is backendOptions plus the retention limit, which only applies
+// when adding packages.
 type pushOptions struct {
-	backend      string
-	bucket       string
-	endpoint     string
-	region       string
-	pathStyle    bool
+	backendOptions
 	keepVersions int
-	signKey      string
-	dryRun       bool
 }
 
 func newPushCmd() *cobra.Command {
@@ -61,14 +79,8 @@ func newPushCmd() *cobra.Command {
 	}
 
 	pf := cmd.PersistentFlags()
-	pf.StringVar(&opts.backend, "backend", "s3", "storage backend (s3, gcs)")
-	pf.StringVar(&opts.bucket, "bucket", "", "destination bucket (required)")
-	pf.StringVar(&opts.endpoint, "endpoint", "", "S3-compatible endpoint URL, e.g. for MinIO/SeaweedFS (optional)")
-	pf.StringVar(&opts.region, "region", "", "S3 region (defaults to the AWS environment)")
-	pf.BoolVar(&opts.pathStyle, "s3-path-style", false, "use path-style S3 addressing (needed by most S3-compatible services)")
+	opts.addFlags(pf)
 	pf.IntVar(&opts.keepVersions, "keep-versions", 0, "versions to retain per package (0 keeps all)")
-	pf.StringVar(&opts.signKey, "sign-key", "", "path to an ASCII-armored PGP private key to sign the repository; passphrase via "+signPassphraseEnv)
-	pf.BoolVar(&opts.dryRun, "dry-run", false, "log the intended actions without writing anything")
 
 	cmd.AddCommand(newPushDebCmd(opts), newPushRPMCmd(opts))
 	return cmd
@@ -184,8 +196,8 @@ func newPushRPMCmd(opts *pushOptions) *cobra.Command {
 	}
 }
 
-// validate checks the flags common to every push subcommand.
-func (o *pushOptions) validate() error {
+// validate checks the flags common to every backend command.
+func (o *backendOptions) validate() error {
 	if o.bucket == "" {
 		return errors.New("--bucket is required")
 	}
@@ -198,7 +210,7 @@ func (o *pushOptions) validate() error {
 }
 
 // signer builds a Signer from --sign-key, or returns nil (unsigned) when unset.
-func (o *pushOptions) signer() (repohost.Signer, error) {
+func (o *backendOptions) signer() (repohost.Signer, error) {
 	if o.signKey == "" {
 		return nil, nil
 	}
@@ -215,7 +227,7 @@ func (o *pushOptions) signer() (repohost.Signer, error) {
 
 // newBackend constructs the storage backend and a cleanup to release any client
 // resources (the GCS client holds connections; the S3 client needs none).
-func (o *pushOptions) newBackend(ctx context.Context) (repohost.Backend, func(), error) {
+func (o *backendOptions) newBackend(ctx context.Context) (repohost.Backend, func(), error) {
 	switch o.backend {
 	case "s3":
 		backend, err := o.newS3Backend(ctx)
@@ -227,7 +239,7 @@ func (o *pushOptions) newBackend(ctx context.Context) (repohost.Backend, func(),
 	}
 }
 
-func (o *pushOptions) newS3Backend(ctx context.Context) (repohost.Backend, error) {
+func (o *backendOptions) newS3Backend(ctx context.Context) (repohost.Backend, error) {
 	var loadOpts []func(*awsconfig.LoadOptions) error
 	if o.region != "" {
 		loadOpts = append(loadOpts, awsconfig.WithRegion(o.region))
@@ -245,7 +257,7 @@ func (o *pushOptions) newS3Backend(ctx context.Context) (repohost.Backend, error
 	return repohost.S3(client, o.bucket), nil
 }
 
-func (o *pushOptions) newGCSBackend(ctx context.Context) (repohost.Backend, func(), error) {
+func (o *backendOptions) newGCSBackend(ctx context.Context) (repohost.Backend, func(), error) {
 	client, err := gcs.NewClient(ctx)
 	if err != nil {
 		return repohost.Backend{}, func() {}, fmt.Errorf("creating GCS client: %w", err)
