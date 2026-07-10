@@ -115,5 +115,10 @@ jobs:
 
       - name: Auto-tag and release
         env:
+          # Creates the GitHub release + uploads archives (scoped to this repo).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes the Homebrew cask to the separate pete-woods/homebrew-tap repo,
+          # which the default GITHUB_TOKEN cannot write to. Set this repo secret to
+          # a PAT with contents:write on homebrew-tap.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
         run: task ci:release

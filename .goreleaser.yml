@@ -41,6 +41,28 @@ archives:
         formats:
           - zip
 
+homebrew_casks:
+  - directory: Casks
+    # Publishes the cask to a SEPARATE repo, so it needs a token with write
+    # access to that repo — the workflow's default GITHUB_TOKEN can't reach it.
+    # See HOMEBREW_TAP_GITHUB_TOKEN in .github/workflows/go.yml.
+    repository:
+      owner: pete-woods
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/pete-woods/repohost"
+    description: "Publish apt and yum/dnf package repositories to cloud object storage"
+    commit_author:
+      name: goreleaser-bot
+      email: goreleaser-bot@users.noreply.github.com
+    # The binaries are unsigned, so strip the macOS quarantine attribute on
+    # install; otherwise Gatekeeper blocks the first run.
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/repohost"]
+
 release:
   prerelease: auto
   name_template: "repohost {{.Version}}"
