@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.29
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.1
-	github.com/aws/smithy-go v1.27.7
+	github.com/aws/smithy-go v1.27.8
 	github.com/cavaliergopher/rpm v1.3.0
 	github.com/docker/go-sdk/container v0.1.0-alpha016
 	github.com/goreleaser/nfpm/v2 v2.47.0
