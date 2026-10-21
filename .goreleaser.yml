@@ -60,8 +60,8 @@ homebrew_casks:
     # install; otherwise Gatekeeper blocks the first run.
     hooks:
       post:
-        install: |
-          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/repohost"]
+        install_steps: |
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/repohost"]
 
 release:
   prerelease: auto
