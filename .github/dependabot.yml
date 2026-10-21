@@ -4,6 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      aws-sdk:
+        patterns:
+          - "github.com/aws/*"
+      gcp-sdk:
+        patterns:
+          - "cloud.google.com/*"
+          - "google.golang.org/*"
+          - "github.com/googleapis/*"
 
   # The build/release tooling (goreleaser, golangci-lint, etc.) lives in a
   # separate module so it stays out of the library's dependency graph.
