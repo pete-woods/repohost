@@ -3,7 +3,7 @@ module github.com/pete-woods/repohost
 go 1.27.3
 
 require (
-	cloud.google.com/go/storage v1.69.0
+	cloud.google.com/go/storage v1.70.0
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
@@ -17,7 +17,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/ulikunitz/xz v0.5.17
-	google.golang.org/api v0.306.0
+	google.golang.org/api v0.307.0
 	gotest.tools/v3 v3.5.2
 )
 
