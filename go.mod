@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
 	github.com/aws/smithy-go v1.28.5
 	github.com/cavaliergopher/rpm v1.3.0
-	github.com/docker/go-sdk/container v0.1.0-alpha016
+	github.com/docker/go-sdk/container v0.1.0-alpha017
 	github.com/goreleaser/nfpm/v2 v2.48.0
 	github.com/klauspost/compress v1.20.3
 	github.com/spf13/cobra v1.10.2
@@ -64,11 +64,11 @@ require (
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/go-connections v0.8.2 // indirect
-	github.com/docker/go-sdk/client v0.1.0-alpha013 // indirect
-	github.com/docker/go-sdk/config v0.1.0-alpha013 // indirect
-	github.com/docker/go-sdk/context v0.1.0-alpha013 // indirect
-	github.com/docker/go-sdk/image v0.1.0-alpha015 // indirect
-	github.com/docker/go-sdk/network v0.1.0-alpha013 // indirect
+	github.com/docker/go-sdk/client v0.1.0-alpha014 // indirect
+	github.com/docker/go-sdk/config v0.1.0-alpha014 // indirect
+	github.com/docker/go-sdk/context v0.1.0-alpha014 // indirect
+	github.com/docker/go-sdk/image v0.1.0-alpha016 // indirect
+	github.com/docker/go-sdk/network v0.1.0-alpha014 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.40.0 // indirect
