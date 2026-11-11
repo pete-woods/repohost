@@ -15,7 +15,7 @@ require (
 	github.com/goreleaser/nfpm/v2 v2.48.0
 	github.com/klauspost/compress v1.20.3
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/ulikunitz/xz v0.5.17
 	google.golang.org/api v0.306.0
 	gotest.tools/v3 v3.5.2
